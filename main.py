@@ -2,6 +2,10 @@ import praw
 import spacy
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from transformers import pipeline
+from pathlib import Path
+from datetime import datetime, timedelta
+import pickle
+import json
 
 
 class EnhancedUSCISAnalyzer:
@@ -144,3 +148,161 @@ class EnhancedUSCISAnalyzer:
 
         # Create directories for data storage
         self.setup_directories()
+
+    def setup_directories(self):
+        """Create necessary directories for data storage."""
+        directories = [
+            "data/raw",
+            "data/processed",
+            "data/exports",
+            "visualizations",
+            "reports",
+            "models",
+        ]
+        for directory in directories:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+    def enhanced_collect_data(
+        self,
+        start_date=datetime(2025, 1, 20),
+        end_date=None,
+        limit=2000,
+        include_hot=True,
+    ):
+        if end_date is None:
+            end_date = datetime.now()
+        print(
+            f"Enhanced data collection from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
+        )
+        subreddit = self.reddit.subreddit("USCIS")
+        posts_collected = 0
+
+        # Collect from multiple sorting methods
+        sorting_methods = ["new", "hot", "top"] if include_hot else ["new", "top"]
+        for method in sorting_methods:
+            print(f'Collecting posts using "{method}" sorting...')
+            if method == "new":
+                submissions = subreddit.new(limit=limit)
+            elif method == "hot":
+                submissions = subreddit.hot(limit=limit // 2)
+            else:
+                submissions = subreddit.top(time_filter="month", limit=limit // 2)
+
+            for submission in submissions:
+                submission_date = datetime.fromtimestamp(submission.created_utc)
+
+                if start_date <= submission_date <= end_date:
+                    post_data = {
+                        "id": submission.id,
+                        "title": submission.title,
+                        "text": submission.text,
+                        "author": (
+                            str(submission.author) if submission.author else "[deleted]"
+                        ),
+                        "score": submission.score,
+                        "upvote_ratio": submission.upvote_ratio,
+                        "num_comments": submission.num_comments,
+                        "created_utc": submission.created_utc,
+                        "created_date": submission_date,
+                        "url": submission.url,
+                        "flair": submission.link_flair_text,
+                        "is_self": submission.is_self,
+                        "domain": submission.domain,
+                        "gilded": submission.gilded,
+                        "stickied": submission.stickied,
+                        "sorting_method": method,
+                        "awards": submission.total_awards_received,
+                        "crosspost_parent": (
+                            submission.crosspost_parent
+                            if hasattr(submission, "crosspost_parent")
+                            else None
+                        ),
+                    }
+                    self.posts_data.append(post_data)
+
+                    # Enhanced comment collection with threading
+                    try:
+                        submission.comments.replace_more(limit=5)
+                        comment_forest = submission.comments.list()
+
+                        for comment in comment_forest[:20]:
+                            comment_data = {
+                                "id": comment.id,
+                                "post_id": submission.id,
+                                "author": (
+                                    str(comment.author)
+                                    if comment.author
+                                    else "[deleted]"
+                                ),
+                                "text": comment.body,
+                                "score": comment.score,
+                                "created_utc": comment.created_utc,
+                                "created_date": datetime.fromtimestamp(
+                                    comment.created_utc
+                                ),
+                                "parent_id": comment.parent_id,
+                                "is_root": comment.is_root,
+                            }
+                            self.comments_data.append(comment_data)
+
+                            # Build network relationships
+                            if comment.parent_id.startswith("t1_"):
+                                self.network_data.append(
+                                    {
+                                        "source": (
+                                            str(comment.author)
+                                            if comment.author
+                                            else "[deleted]"
+                                        ),
+                                        "target": "parent_comment",
+                                        "type": "reply",
+                                        "timestamp": comment.created_utc,
+                                        "post_id": submission.id,
+                                    }
+                                )
+                            else:
+                                self.network_data.append(
+                                    {
+                                        "source": (
+                                            str(comment.author)
+                                            if comment.author
+                                            else "[deleted]"
+                                        ),
+                                        "target": (
+                                            str(submission.author)
+                                            if submission.author
+                                            else "[deleted]"
+                                        ),
+                                        "type": "comment",
+                                        "timestamp": comment.created_utc,
+                                        "post_id": submission.id,
+                                    }
+                                )
+                    except Exception as e:
+                        print(
+                            f"Error collecting comments for post {submission.id}: {e}"
+                        )
+
+                    posts_collected += 1
+                    if posts_collected % 100 == 0:
+                        print(f"Collected {posts_collected} posts so far...")
+
+            print(
+                f"Collection complete: {len(self.posts_data)} posts, {len(self.comments_data)} comments"
+            )
+            self.save_raw_data()
+
+    def save_raw_data(self):
+        """Save raw collected data."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Save as pickle for Python objects
+        with open(f"data/raw/posts_{timestamp}.pkl", "wb") as f:
+            pickle.dump(self.posts_data, f)
+
+        with open(f"data/raw/comments_{timestamp}.pkl", "wb") as f:
+            pickle.dump(self.comments_data, f)
+
+        # Save as JSON for interoperability
+        with open(f"data/raw/network_data_{timestamp}.json", "w") as f:
+            json.dump(self.network_data, f, indent=4)
