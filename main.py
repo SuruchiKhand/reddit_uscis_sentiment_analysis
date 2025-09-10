@@ -7,6 +7,11 @@ from datetime import datetime, timedelta
 import pickle
 import json
 from textblob import TextBlob
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+import numpy as np
+import networkx as nx
 
 
 class EnhancedUSCISAnalyzer:
@@ -461,3 +466,325 @@ class EnhancedUSCISAnalyzer:
             if found_milestones:
                 milestones_patterns[category] = found_milestones
         return category_matches, milestones_patterns
+
+    def perform_topic_modeling(self, n_topics=15, min_df=2, max_df=0.8):
+        print("Performing topic modeling...")
+
+        # Combine all text data
+        texts = []
+        metadata = []
+
+        for item in self.sentiment_data:
+            if len(item["full_text"].strip()) > 50:  # Filter very short texts
+                texts.append(item["full_text"])
+                metadata.append(
+                    {
+                        "id": item["id"],
+                        "type": item["content_type"],
+                        "date": item["created_date"],
+                        "sentiment": item["adjusted_compound"],
+                    }
+                )
+        if len(texts) < n_topics:
+            print(
+                f"Warning: Only {len(texts)} documents available for {n_topics} topics"
+            )
+            n_topics = min(len(texts) // 2, n_topics)
+
+        # Create TF-IDF matrix
+        stop_words = list(stopwords.words("english")) + [
+            "uscis",
+            "case",
+            "application",
+            "form",
+            "time",
+            "day",
+            "month",
+            "year",
+            "people",
+            "person",
+            "anyone",
+            "everyone",
+            "someone",
+            "anything",
+        ]
+
+        vectorizer = TfidVectorizer(
+            max_features=1000,
+            min_df=min_df,
+            max_df=max_df,
+            stop_words=stop_words,
+            ngram_range=(1, 2),
+            lowercase=True,
+        )
+
+        try:
+            tfidf_matrix = vectorizer.fit_transform(texts)
+            feature_names = vectorizer.get_feature_names_out()
+
+            # Perform LDA
+            lda = LatentDirichletAllocation(
+                n_components=n_topics,
+                random_state=42,
+                max_iter=100,
+                learning_method="batch",
+            )
+
+            lda.fit(tfidf_matrix)
+
+            # Extract topics with interpretable names
+            topics = []
+            for topic_idx, topic in enumerate(lda.components_):
+                top_word_indices = topic.argsort()[-15:][::-1]
+                top_words = [feature_names[i] for i in top_word_indices]
+                top_scores = [topic[i] for i in top_word_indices]
+
+                # Generate topic name based on top words
+                topic_name = self.generate_topic_name(top_words[:50])
+
+                topics.append(
+                    {
+                        "topic_id": topic_idx,
+                        "name": topic_name,
+                        "words": top_words,
+                        "scores": top_scores,
+                        "coherence": np.mean(top_scores[:5]),
+                    }
+                )
+
+                # Document-topic assignments
+                doc_topic_matrix = lda.transform(tfidf_matrix)
+
+                # Assign topics to documents
+                for i, doc_topics in enumerate(doc_topic_matrix):
+                    dominant_topic = np.argmax(doc_topics)
+                    topic_confidence = doc_topics[dominant_topic]
+
+                    metadata[i].update(
+                        {
+                            "dominant_topic": dominant_topic,
+                            "topic_confidence": topic_confidence,
+                            "topic_name": topics[dominant_topic]["name"],
+                        }
+                    )
+
+                self.topics_data = {
+                    "topics": topics,
+                    "document_metadata": metadata,
+                    "model_params": {
+                        "n_topics": n_topics,
+                        "min_df": min_df,
+                        "max_df": max_df,
+                    },
+                }
+
+                # Save topic model
+                with open("models/topic_model.pkl", "wb") as f:
+                    pickle.dump(
+                        {"lda": lda, "vectorizer": vectorizer, "topics": topics}, f
+                    )
+
+                print(f"Topic modeling complete: {n_topics} topics extracted")
+                return self.topics_data
+        except Exception as e:
+            print(f"Error in topic modeling: {e}")
+            return None
+
+    def generate_topic_name(self, top_words):
+
+        # Immigration-specific topic naming logic
+        if any(
+            word in top_words for word in ["approved", "approval", "card", "produced"]
+        ):
+            return "Approvals & Card Production"
+        elif any(word in top_words for word in ["interview", "scheduled", "completed"]):
+            return "Interview Process"
+        elif any(
+            word in top_words for word in ["rfe", "evidence", "additional", "request"]
+        ):
+            return "RFE & Additional Evidence"
+        elif any(
+            word in top_words for word in ["denied", "denial", "rejected", "appeal"]
+        ):
+            return "Denials & Appeals"
+        elif any(
+            word in top_words for word in ["waiting", "delay", "processing", "time"]
+        ):
+            return "Processing Delays & Wait Times"
+        elif any(
+            word in top_words for word in ["biometrics", "fingerprint", "appointment"]
+        ):
+            return "Biometrics & Appointments"
+        elif any(
+            word in top_words for word in ["marriage", "spouse", "family", "relative"]
+        ):
+            return "Family-Based Immigration"
+        elif any(
+            word in top_words for word in ["job", "employer", "work", "employment"]
+        ):
+            return "Employment-Based Immigration"
+        elif any(word in top_words for word in ["student", "f1", "opt", "study"]):
+            return "Student Visas & OPT"
+        elif any(word in top_words for word in ["asylum", "refugee", "persecution"]):
+            return "Asylum & Refugee Cases"
+        elif any(word in top_words for word in ["timeline", "experience", "sharing"]):
+            return "Timeline Sharing & Experiences"
+        elif any(
+            word in top_words for word in ["attorney", "lawyer", "legal", "advice"]
+        ):
+            return "Legal Advice & Representation"
+        elif any(word in top_words for word in ["expedite", "urgent", "emergency"]):
+            return "Expedite Requests"
+        else:
+            return f"Topic: {' & '.join(top_words[:2])}"
+
+    def analyze_user_network(self):
+        print("Analyzing user interaction network...")
+
+        # Build network graph
+        G = nx.Graph()
+
+        # Add edges from network data
+        for interaction in self.network_data:
+            if (
+                interaction["source"] != "[deleted]"
+                and interaction["target"] != "[deleted]"
+            ):
+                G.add_edge(
+                    interaction["source"],
+                    interaction["target"],
+                    type=interaction["type"],
+                    timestamp=interaction["timestamp"],
+                )
+
+        if len(G.nodes()) == 0:
+            print("No network data available")
+            return None
+
+        # Calculate network metrics
+        try:
+            # Centrality measures
+            degree_centrality = nx.degree_centrality(G)
+            betweenness_centrality = nx.betweenness_centrality(G)
+            closeness_centrality = nx.closeness_centrality(G)
+
+            # Community detection
+            communities = nx.community.greedy_modularity_communities(G)
+
+            # Identify key influencers
+            influencers = []
+            for node in G.nodes():
+                influencer_score = (
+                    degree_centrality.get(node, 0) * 0.4
+                    + betweenness_centrality.get(node, 0) * 0.3
+                    + closeness_centrality.get(node, 0) * 0.3
+                )
+                influencers.append(
+                    {
+                        "user": node,
+                        "degree_centrality": degree_centrality.get(node, 0),
+                        "betweenness_centrality": betweenness_centrality.get(node, 0),
+                        "closenness_centrality": closeness_centrality.get(node, 0),
+                        "influencer_score": influencer_score,
+                    }
+                )
+
+            # Sort by influence score
+            influencers.sort(key=lambda x: x["influencer_score"], reverse=True)
+
+            network_analysis = {
+                "total_users": len(G.nodes()),
+                "total_interactions": len(G.edges()),
+                "network_density": nx.density(G),
+                "number_of_communities": len(communities),
+                "top_influencers": influencers[:10],
+                "average_clustering": nx.average_clustering(G),
+                "diameter": nx.diameter(G) if nx.is_connected(G) else None,
+            }
+            print(
+                f"Network analysis complete: {len(G.nodes())} users, {len(G.edges())} interactions"
+            )
+            return network_analysis
+
+        except Exception as e:
+            print(f"Erro in network analysis: {e}")
+            return None
+
+    def advanced_processing(self):
+        print("Start advanced data processing...")
+
+        all_data = []
+
+        # Process posts
+        for post in self.posts_data:
+            full_text = f"{post['title']} {post['text']}"
+
+            # Enhanced classification
+            visa_matches, milestone_patterns = self.enhanced_classification(full_text)
+
+            # Enhanced sentiment analysis
+            sentiment = self.enhanced_sentiment_analysis(full_text, milestone_patterns)
+
+            # Extract additional metadata
+            metadata = self.extract_advanced_metadata(full_text, post)
+
+            processed_item = {
+                **post,
+                **sentiment,
+                "visa_category_matches": visa_matches,
+                "processing_milestones": milestone_patterns,
+                "metadata": metadata,
+                "content_type": "post",
+                "full_text": full_text,
+                "text_length": len(full_text),
+                "engagement_store": self.calculate_engagement_score(post),
+            }
+
+            all_data.append(processed_item)
+
+        # Process comments
+        for comment in self.comments_data:
+            visa_matches, milestone_patterns = self.enhanced_classification(
+                comment["text"]
+            )
+            sentiment = self.enhanced_sentiment_analysis(
+                comment["text"], milestone_patterns
+            )
+            metadata = self.extract_advanced_metadata(comment["text"], comment)
+
+            processed_item = {
+                **comment,
+                **sentiment,
+                "visa_category_matches": visa_matches,
+                "processing_milestones": milestone_patterns,
+                "metadata": metadata,
+                "content_type": "comment",
+                "full_text": comment["text"],
+                "text_length": len(comment["text"]),
+                "engagement_score": comment["score"],
+            }
+
+        self.sentiment_data = all_data
+
+        # Perform advanced analytics
+        self.perform_topic_modeling()
+        self.network_analysis = self.analyze_user_network()
+
+        print(
+            f"Advanced processing complete: {len(self.sentiment_data)} items analyzed"
+        )
+
+        # Save processed data
+        self.save_processed_data()
+
+    def extract_advanced_metadata(self, text, item):
+        metadata = {
+            "question_indicators": self.detect_question_patterns(text),
+            "urgency_level": self.detect_urgency_level(text),
+            "experience_sharing": self.detect_experience_sharing(text),
+            "advice_seeking": self.detect_advice_seeking(text),
+            "timeline_mention": self.extract_location_mentions(text),
+            "location_mentions": self.extract_form_mentions(text),
+            "service_center_mentions": self.extract_service_center_mentions(text),
+        }
+        return metadata
