@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import pickle
 import json
+from textblob import TextBlob
 
 
 class EnhancedUSCISAnalyzer:
@@ -305,4 +306,158 @@ class EnhancedUSCISAnalyzer:
 
         # Save as JSON for interoperability
         with open(f"data/raw/network_data_{timestamp}.json", "w") as f:
-            json.dump(self.network_data, f, indent=4)
+            json.dump(self.network_data, f, default=str)
+
+    def enhanced_sentiment_analysis(self, text, processing_milestones=None):
+
+        # Base sentiment analysis
+        vader_scores = self.vader_analyzer.polarity_scores(text)
+        blob = TextBlob(text)
+
+        try:
+            emotions = self.emotion_analyzer(text[:512])
+            emotion_scores = {
+                emotion["label"]: emotion["score"] for emotion in emotions
+            }
+            dominant_emotion = max(emotion_scores.items(), key=lambda x: x[1])
+        except:
+            emotion_scores = {"neutral": 1.0}
+            dominant_emotion = ("neutral", 1.0)
+
+        # Processing milestone adjustment
+        milestone_adjustment = 0
+        if processing_milestones:
+            for category, milestones in processing_milestones.items():
+                if milestones:
+                    milestone_adjustment += self.processing_milestones.get(
+                        category, {}
+                    ).get("weight", 0)
+
+        # Adjusted compound scene
+        adjusted_compound = vader_scores["compound"] + (milestone_adjustment * 0.3)
+        adjusted_compound = max(-1, min(1, adjusted_compound))
+
+        return {
+            "vader_compound": vader_scores["compound"],
+            "vader_positive": vader_scores["pos"],
+            "vader_neutral": vader_scores["neu"],
+            "vader_negative": vader_scores["neg"],
+            "textblob_polarity": blob.sentiment.polarity,
+            "textblob_subjectivity": blob.sentiment.subjectivity,
+            "emotion_scores": emotion_scores,
+            "dominant_emotion": emotion_scores,
+            "emotion_confidence": dominant_emotion[0],
+            "milestone_adjustment": adjusted_compound,
+            "sentiment_category": self.categorize_esentiment(adjusted_compound),
+        }
+
+    def categorize_sentiment(self, compound_score):
+        if compound_score >= 0.5:
+            return "very_positive"
+        elif compound_score >= 0.1:
+            return "positive"
+        elif compound_score >= -0.1:
+            return "neutral"
+        elif compound_score >= -0.5:
+            return "negative"
+        else:
+            return "very negative"
+
+    def enhanced_classification(self, text):
+        text_lower = text.lower()
+
+        # Visa category classification with confidence scores
+        category_matches = {}
+        for category, info in self.visa_categories.items():
+            score = 0
+            matches = []
+
+            # Check for exact code matches (high weight)
+            for code in info["codes"]:
+                if code.lower() in text_lower:
+                    score += 3
+                    matches.append(f"code:{code}")
+
+            # Check for form patterns (medium weight)
+            form_patterns = ["i-130", "i-485", "ds-260", "i-129", "i-539"]
+            for pattern in form_patterns:
+                if pattern in text_lower:
+                    score += 2
+                    matches.append(f"form:{pattern}")
+
+            # Check for contextual keywords (low weight)
+            category_keywords = {
+                "Family-Based-Immediate": [
+                    "spouse",
+                    "husband",
+                    "wife",
+                    "parent",
+                    "child",
+                    "immediate relative",
+                ],
+                "Family-Based-Preference": [
+                    "sibling",
+                    "brother",
+                    "sister",
+                    "adult child",
+                    "unmarried",
+                ],
+                "Employment-Based-Priority": [
+                    "job",
+                    "employer",
+                    "work",
+                    "employment",
+                    "labor certification",
+                ],
+                "Employment-Based-Investment": [
+                    "investor",
+                    "investment",
+                    "business",
+                    "job creation",
+                ],
+                "Nonimmigrant-Work": [
+                    "temporary work",
+                    "specialty occupation",
+                    "transfer",
+                    "extraordinary ability",
+                ],
+                "Nonimmigrant-Student": [
+                    "student",
+                    "study",
+                    "school",
+                    "university",
+                    "academic",
+                ],
+                "Nonimmigrant-Visitor": [
+                    "tourist",
+                    "visitor",
+                    "business trip",
+                    "vacation",
+                ],
+                "Humanitarian": [
+                    "asylum",
+                    "refugee",
+                    "persecution",
+                    "violence",
+                    "protection",
+                ],
+            }
+            if category in category_keywords:
+                for keyword in category_keywords[category]:
+                    if keyword in text_lower:
+                        score += 1
+                        matches.append(f"keyword:{keyword}")
+
+            if score > 0:
+                category_matches[category] = {"score": score, "matches": matches}
+
+        # Processing milestone detection with enhanced patterns
+        milestones_patterns = {}
+        for category, info in self.processing_milestones.items():
+            found_milestones = []
+            for keyword in info["keywords"]:
+                if keyword.lower() in text_lower:
+                    found_milestones.append(keyword)
+            if found_milestones:
+                milestones_patterns[category] = found_milestones
+        return category_matches, milestones_patterns
