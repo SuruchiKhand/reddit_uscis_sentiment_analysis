@@ -12,6 +12,12 @@ from sklearn.feature_extraction.text import TfidVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 import numpy as np
 import networkx as nx
+import re
+import pandas as pd
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+import plotly.express as px
+from collections import Counter, defaultdict
 
 
 class EnhancedUSCISAnalyzer:
@@ -788,3 +794,243 @@ class EnhancedUSCISAnalyzer:
             "service_center_mentions": self.extract_service_center_mentions(text),
         }
         return metadata
+
+    def detect_question_patterns(self, text):
+        question_patterns = [
+            r"\?",
+            r"how long",
+            r"when will",
+            r"is it normal",
+            r"anyone else",
+            r"should i",
+            r"can i",
+            r"will i",
+            r"am i",
+            r"has anyone",
+        ]
+
+        question_count = sum(
+            1 for pattern in question_patterns if re.search(pattern, text, text.lower())
+        )
+
+        return {
+            "is_question": question_count > 0,
+            "question_intensity": question_count,
+            "contains_question_mark": "?" in text,
+        }
+
+    def detect_urgency_level(self, text):
+        urgent_keywords = [
+            "urgent",
+            "emergency",
+            "asap",
+            "immediately",
+            "critical",
+            "deadline",
+            "expires",
+            "time sensitive",
+        ]
+        moderate_keywords = ["soon", "quickly", "fast", "expedite"]
+
+        urgent_count = sum(1 for word in urgent_keywords if word in text.lower())
+        moderate_count = sum(
+            1 for keyword in moderate_keywords if keyword in text.lower()
+        )
+
+        if urgent_count > 0:
+            return "high"
+        elif moderate_count > 0:
+            return "medium"
+        else:
+            return "low"
+
+    def detect_experience_sharing(self, text):
+        experience_patterns = [
+            r"my timeline",
+            r"my experience",
+            r"i received",
+            r"i got",
+            r"i was",
+            r"just got",
+            r"finally",
+            r"update:",
+            r"approved!",
+            r"timeline:",
+        ]
+
+    def detect_advice_seeking(self, text):
+        advice_patterns = [
+            r"should i",
+            r"what should",
+            r"any advice",
+            r"help please",
+            r"what to do",
+            r"recommendations",
+            r"suggestions",
+        ]
+        return any(re.search(pattern, text.lower()) for pattern in advice_patterns)
+
+    def extract_timeline_mentions(self, text):
+        timeline_patterns = [
+            r"(\d+)\s*(days?|weeks?|months?|years?)",
+            r"(january|february|march|april|may|june|july|august|september|october|november|december)\s*\d{4}",
+            r"\d{1,2}/\d{1,2}/\d{4}",
+        ]
+        timelines = []
+        for pattern in timeline_patterns:
+            matches = re.findall(pattern, text.lower())
+            timelines.extend(matches)
+
+        return timelines
+
+    def extract_location_mentions(self, text):
+        locations = [
+            "atlanta",
+            "boston",
+            "chicago",
+            "dallas",
+            "detroit",
+            "el paso",
+            "houston",
+            "las vegas",
+            "los angeles",
+            "miami",
+            "new york",
+            "newark",
+            "orlando",
+            "philadelphia",
+            "phoenix",
+            "san antonio",
+            "san francisco",
+            "seattle",
+            "tampa",
+            "washington dc",
+        ]
+
+        found_locations = []
+        for location in locations:
+            if location in text.lower():
+                found_locations.append(location)
+        return found_locations
+
+    def extract_form_mentions(self, text):
+        form_pattern = r"\b([IN]-\d{3}[A-Z]?|DS-\d{3})\b"
+        forms = re.findall(form_pattern, text.upper())
+        return list(set(forms))
+
+    def extract_service_center_mentions(self, text):
+        centers = []
+        for center, info in self.service_centers.items():
+            if center.lower() in text.lower() or info["code"].lower() in text.lower():
+                centers.append(center)
+        return centers
+
+    def calculate_engagement_score(self, item):
+        if "num_comments" in item:
+            return (
+                item["score"] * 0.3
+                + item["num_comments"] * 0.5
+                + item["upvote_ratio"] * 20
+                + item.get("awards", 0) * 5
+            )
+        else:
+            return item["score"]
+
+    def save_processed_data(self):
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Save as pandas DataFrame
+        df = pd.DataFrame(self.sentiment_data)
+        df.to_csv(f"data/processed/processed_data_{timestamp}.csv", index=False)
+        df.to_parquet(f"data/processed/processed_data_{timestamp}.parquet")
+
+        # Save topic modeling results
+        if self.topics_data:
+            with open(f"data/processed/topics_data_{timestamp}.json", "w") as f:
+                json.dump(self.topics_data, f, indent=2, default=str)
+        print(f"Processed data saved with timestamp {timestamp}")
+
+    def create_advanced_visaualizations(self):
+        print("Creating advanced visaulizations")
+
+        # Create main dashboard
+        fig = make_subplots(
+            rows=4,
+            cols=3,
+            subplot_titles=(
+                "Sentiment Trends Over Time",
+                "Visa Category Distribution",
+                "Emotion Analysis",
+                "Processing Milestone Impact",
+                "Service Center Performance",
+                "Topic Distribution",
+                "Engagement vs Sentiment",
+                "Network Influence",
+                "Urgency Levels",
+                "Timeline Mentions",
+                "Geographic Distribution",
+                "Content Type Analysis",
+            ),
+            specs=[
+                [{"secondary_y": True}, {"type": "bar"}, {"type": "pie"}],
+                [{"type": "bar"}, {"type": "bar"}, {"type": "pie"}],
+                [{"type": "scatter"}, {"type": "bar"}, {"type": "pie"}],
+                [{"type": "histogram"}, {"type": "bar"}, {"type": "bar"}],
+            ],
+        )
+
+        df = pd.DataFrame(self.sentiment_data)
+        df["created_date"] = pd.to_datetime(df["created_date"])
+        df["week"] = df["created_date"].dt.to_period("W")
+
+        # 1. Sentiment trends over time with volume
+        weekly_sentiment = (
+            df.groupby("week")
+            .agg({"adjusted_compound": "mean", "id": "count"})
+            .reset_index()
+        )
+        fig.add_trace(
+            go.Bar(
+                x=weekly_sentiment["week"].astype(str),
+                y=weekly_sentiment["id"],
+                name="Volume",
+                opacity=0.3,
+                yaxis="y2",
+            ),
+            row=1,
+            col=1,
+            secondary_y=True,
+        )
+
+        # 2. Top visa categories by volume
+        visa_categories = []
+        for item in self.sentiment_data:
+            for category in item.get("visa_category_matches", {}):
+                visa_categories.append(category)
+
+        if visa_categories:
+            category_counts = Counter(visa_categories).most_common(8)
+            fig.add_trace(
+                go.Bar(
+                    x=[cat[0].replace("-", " ") for cat in category_counts],
+                    y=[cat[1] for cat in category_counts],
+                    marker_color="lightblue",
+                    name="Categories",
+                ),
+                row=1,
+                col=2,
+            )
+
+        # 3. Emotion distribution
+        emotions = df["dominant_emotion"].value_counts()
+        fig.add_trace(
+            go.Pie(
+                labels=emotions.index,
+                values=emotions.values,
+                name="Emotions",
+                marker_colors=px.colors.qualitative.Set3,
+            ),
+            row=1,
+            col=3,
+        )
