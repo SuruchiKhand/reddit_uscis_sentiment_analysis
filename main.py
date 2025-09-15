@@ -1034,3 +1034,264 @@ class EnhancedUSCISAnalyzer:
             row=1,
             col=3,
         )
+
+        # 4. Processing milestone sentiment impact
+        milestone_sentiment = {}
+        for item in self.sentiment_data:
+            for milestone_type, milestones in item.get(
+                "processing_milestones", {}
+            ).items():
+                if milestones:
+                    if milestone_type not in milestone_sentiment:
+                        milestone_sentiment[milestone_type] = []
+                    milestone_sentiment[milestone_type].append(
+                        item["adjusted_compound"]
+                    )
+
+        milestone_avgs = {k: np.mean(v) for k, v in milestone_sentiment.items() if v}
+        if milestone_avgs:
+            colors = [
+                "green" if v > 0.1 else "red" if v < -0.1 else "gray"
+                for v in milestone_avgs.values()
+            ]
+            fig.add_trace(
+                go.Bar(
+                    x=list(milestone_avgs.keys()),
+                    y=list(milestone_avgs.values()),
+                    marker_color=colors,
+                    name="Milestones",
+                ),
+                row=2,
+                col=1,
+            )
+
+        # 5. Service center performance (if network analysis available)
+        if hasattr(self, "network_analysis") and self.network_analysis:
+            service_performance = {}
+            for item in self.sentiment_data:
+                for center in item["metadata"].get("service_center_mentions", []):
+                    if center not in service_performance:
+                        service_performance[center] = []
+                    service_performance[center].append(item["adjusted_compound"])
+
+            center_avgs = {
+                k: np.mean(v) for k, v in service_performance.items() if len(v) > 5
+            }
+            if center_avgs:
+                fig.add_trace(
+                    go.Bar(
+                        x=[
+                            k.replace(" Service Center", "") for k in center_avgs.keys()
+                        ],
+                        y=list(center_avgs.values()),
+                        marker_color="lightgreen",
+                        name="Service Centers",
+                    ),
+                    row=2,
+                    col=2,
+                )
+
+        # 6. Topic distribution (if topics available)
+        if self.topics_data and "document_metadata" in self.topics_data:
+            topic_counts = Counter(
+                [doc["topics_name"] for doc in self.topics_data["document_metadata"]]
+            )
+            top_topics = topic_counts.most_common(8)
+            fig.add_trace(
+                go.Pie(
+                    labels=[t[0] for t in top_topics],
+                    values=[t[1] for t in top_topics],
+                    name="Topics",
+                    marker_colors=px.colors.qualitative.Pastel,
+                ),
+                row=2,
+                col=3,
+            )
+
+        # 7. Engagement vs Sentiment correlation
+        posts_df = df[df["content_type"] == "post"].copy()
+        if not posts_df.empty and "engagement_score" in posts_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=posts_df["ajusted_compound"],
+                    y=posts_df["engagement_score"],
+                    mode="markers",
+                    marker=dict(
+                        color=posts_df["adjusted_compound"],
+                        colorscale="RdYlBu",
+                        size=8,
+                        opacity=0.7,
+                    ),
+                    name="Posts",
+                ),
+                row=3,
+                col=1,
+            )
+
+        # 8. Top network influencers (if available)
+        if (
+            hasattr(self, "network_analysis")
+            and self.network_analysis
+            and "top_influencers" in self.network_analysis
+        ):
+            top_influencers = self.network_analysis["top_influencers"]
+            fig.add_trace(
+                go.Bar(
+                    x=[
+                        (
+                            inf["user"][:10] + "..."
+                            if len(inf["user"]) > 10
+                            else inf["user"]
+                        )
+                        for inf in top_influencers
+                    ],
+                    y=[inf["influencer_score"] for inf in top_influencers],
+                    marker_color="orange",
+                    name="Top Influencers",
+                ),
+                row=3,
+                col=2,
+            )
+
+        # 9. Urgency level distribution
+        urgency_counts = Counter(
+            [item["metadata"]["urgency_level"] for item in self.sentiment_data]
+        )
+        fig.add_trace(
+            go.Bar(
+                x=list(urgency_counts.keys()),
+                y=list(urgency_counts.values()),
+                marker_color=["red", "orange", "green"],
+                name="Urgency",
+            ),
+            row=3,
+            col=3,
+        )
+
+        # 10. Timeline mentions distribution
+        timeline_counts = []
+        for item in self.sentiment_data:
+            timeline_counts.extend(item["metadata"].get("timeline_mentions", []))
+
+        if timeline_counts:
+            fig.add_trace(
+                go.Histogram(
+                    x=[str(t) for t in timeline_counts[:50]],
+                    name="Timelines",
+                ),
+                row=4,
+                col=1,
+            )
+
+        # 11. Geographic distribution
+        location_counts = []
+        for item in self.sentiment_data:
+            location_counts.extend(item["metadata"].get("location_mentions", []))
+
+        if location_counts:
+            top_locations = Counter(location_counts).most_common(8)
+            fig.add_trace(
+                go.Bar(
+                    x=[loc.title() for loc in top_locations],
+                    y=[loc[1] for loc in top_locations],
+                    marker_color="lightcoral",
+                    name="Locations",
+                ),
+                row=4,
+                col=2,
+            )
+
+        # 12. Content type analysis
+        content_analysis = (
+            df.groupby("content_type")
+            .agg({"adjusted_compound": "mean", "id": "count"})
+            .reset_index()
+        )
+        fig.add_trace(
+            go.Bar(
+                x=content_analysis["content_type"],
+                y=content_analysis["id"],
+                name="Content Types",
+                marker_color="lightsteelblue",
+            ),
+            row=4,
+            col=3,
+        )
+
+        # Update layout
+        fig.update_layout(
+            height=1600,
+            title_text="Advanced USCIS Reddit Sentiment Analysis Dashboard",
+            showlegend=False,
+            font=dict(size=10),
+        )
+
+        # Save and show
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fig.write_html(f"visualizations/advanced_dashboard_{timestamp}.html")
+        fig.show()
+
+        return fig
+
+    def generate_comprehensive_report(self):
+        print("Generating comprehensive analysis report...")
+
+        df = pd.DataFrame(self.sentiment_data)
+
+        # Calculate advanced metrics
+        report = {
+            "executive_summary": {
+                "analysis_period": {
+                    "start": df["created_date"].min(),
+                    "end": df["created_date"].max(),
+                    "total_days": (
+                        df["created_date"].max() - df["created_date"].min()
+                    ).days,
+                },
+                "data_volume": {
+                    "total_posts": len(df[df["content_type"] == "post"]),
+                    "total_comments": len(df[df["content_type"] == "comment"]),
+                    "total_interactions": len(df),
+                    "daily_average": len(df)
+                    / max(
+                        1, (df["created_date"].max() - df["created_date"].min()).days
+                    ),
+                },
+                "overall_sentiment": {
+                    "average_sentiment": df["adjusted_compound"].mean(),
+                    "sentiment_std": df["adjusted_compound"].std(),
+                    "positive_ratio": len(df[df["adjusted_compound"] > 0.1]) / len(df),
+                    "negative_ratio": len(df[df["adjusted_compound"] < -0.1]) / len(df),
+                    "dominant_emotion": (
+                        df["dominant_emotion"].mode().iloc[0]
+                        if not df.empty
+                        else "neutral"
+                    ),
+                },
+            },
+            "visa_category_insights": self.analyze_visa_categories_advanced(),
+            "processing_milestone_analysis": self.analyze_processing_milestones(),
+            "temporal_analysis": self.analyze_temporal_patterns(df),
+            "community_dynamics": self.analyze_community_dynamics(df),
+            "content_analysis": self.analyze_content_patterns(df),
+            "geographic_insights": self.analyze_geographic_patterns(df),
+            "topic_modeling_results": self.topics_data if self.topics_data else None,
+            "network_analysis_results": (
+                self.network_analysts if hasattr(self, "network_analysis") else None
+            ),
+            "key_findings": self.summarize_key_findings(),
+            "recommendations": self.generate_recommendations(df),
+        }
+
+        # Save report
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Save as JSON
+        with open(f"reports/comprehensive_report_{timestamp}.json", "w") as f:
+            json.dump(report, f, indent=2, default=str)
+
+        # Save as formatted text report
+        self.save_formatted_report(report, timestamp)
+
+        print(f"Comprehensive report generated and saved with timestamp {timestamp}")
+        return report
