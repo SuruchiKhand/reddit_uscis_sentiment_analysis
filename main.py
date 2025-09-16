@@ -1295,3 +1295,280 @@ class EnhancedUSCISAnalyzer:
 
         print(f"Comprehensive report generated and saved with timestamp {timestamp}")
         return report
+
+    def analyze_visa_categories_advanced(self):
+        category_analysis = {}
+
+        for item in self.sentiment_data:
+            for category, match_info in item.get("visa_category_matches", {}).items():
+                if category not in category_analysis:
+                    category_analysis[category] = {
+                        "mentions": 0,
+                        "sentiments": [],
+                        "emotions": [],
+                        "urgency_levels": [],
+                        "engagement_scores": [],
+                    }
+                category_analysis[category]["mentions"] += 1
+                category_analysis[category]["sentiments"].append(
+                    item["adjusted_compound"]
+                )
+                category_analysis[category]["emotions"].append(item["dominant_emotion"])
+                category_analysis[category]["urgency_levels"].append(
+                    item["metadata"]["urgency_level"]
+                )
+
+                if "engagement_score" in item:
+                    category_analysis[category]["engagement_scores"].append(
+                        item["engagement_score"]
+                    )
+
+        # Calculate summary statistics
+        for category, data in category_analysis.items():
+            if data["sentiments"]:
+                data["avg_sentiment"] = np.mean(data["sentiments"])
+                data["sentiment_std"] = np.std(data["sentiments"])
+                data["dominant_emotion"] = Counter(data["emotions"]).most_common(1)[0][
+                    0
+                ]
+                data["high_urgency_ratio"] = data["urgency_levels"].count("high") / len(
+                    data["urgency_levels"]
+                )
+
+            if data["engagement_scores"]:
+                data["avg_engagement"] = np.mean(data["engagement_scores"])
+            return dict(
+                sorted(
+                    category_analysis.items(),
+                    key=lambda x: x[1]["mentions"],
+                    reverse=True,
+                )
+            )
+
+    def analyze_processing_milestones(self):
+        milestone_analysis = {}
+
+        for item in self.sentiment_data:
+            for milestone_type, milestones in item.get(
+                "processing_milestones", {}
+            ).items():
+                if milestones:
+                    milestone_analysis[milestone_type]["mentions"] += 1
+                    milestone_analysis[milestone_type]["sentiments"].append(
+                        item["adjusted_compound"]
+                    )
+                    milestone_analysis[milestone_type]["emotions"].append(
+                        item["dominant_emotion"]
+                    )
+
+        # Calculate statistics
+        for milestone, data in milestone_analysis.items():
+            if data["sentiments"]:
+                data["avg_sentiment"] = np.mean(data["sentiments"])
+                data["sentiment_range"] = [
+                    min(data["sentiments"]),
+                    max(data["sentiments"]),
+                ]
+                data["dominant_emotion"] = Counter(data["emotions"]).most_common(1)[0][
+                    0
+                ]
+                data["expected_weight"] = self.processing_milestones[milestone_type][
+                    "weight"
+                ]
+
+        return milestone_analysis
+
+    def analyze_temporal_patterns(self, df):
+
+        df["hour"] = df["created_date"].dt.hour
+        df["day_of_week"] = df["created_date"].dt.day_name()
+        df["week"] = df["created_date"].dt.to_period("W")
+
+        temporal_analysis = {
+            "hourly_patterns": {
+                "activity_by_hour": df.groupby("hour").size().to_dict(),
+                "sentiment_by_hour": df.groupby("hour")["adjusted_compound"]
+                .mean()
+                .to_dict(),
+            },
+            "weekly_patterns": {
+                "activity_by_day": df.groupby("day_of_week").size().to_dict(),
+                "sentiment_by_day": df.groupby("day_of_week")["adjusted_compound"]
+                .mean()
+                .to_dict(),
+            },
+            "trend_analysis": {
+                "weekly_sentiment": df.groupby("week")["adjusted_compound"]
+                .mean()
+                .to_dict(),
+                "weekly_volume": df.groupby("week").size().to_dict(),
+                "sentiment_trend": (
+                    "improving"
+                    if df["adjusted_compound"].corr(df.index) > 0
+                    else "declining"
+                ),
+            },
+        }
+        return temporal_analysis
+
+    def analyze_community_dynamics(self, df):
+
+        posts_df = df[df["content_type"] == "post"]
+        comments_df = df[df["content_type"] == "comment"]
+
+        community_analysis = {
+            "engagement_patterns": {
+                "avg_comments_per_post": (
+                    comments_df.groupby("posts_id").size().mean()
+                    if not comments_df.empty
+                    else 0
+                ),
+                "high_engagement_threshold": (
+                    posts_df["engagement score"].quantile(0.9)
+                    if "engagement score" in posts_df.columns
+                    else 0
+                ),
+                "question_response_ratio": self.calculate_question_response_rate(df),
+            },
+            "support_patterns": {
+                "advice_seeking_ratio": sum(
+                    1
+                    for item in self.sentiment_data
+                    if item["metadata"]["advice_seeking"]
+                )
+                / len(self.sentiment_data),
+                "experience_sharing_ratio": sum(
+                    1
+                    for item in self.sentiment_data
+                    if item["metadata"]["experience_sharing"]
+                )
+                / len(self.sentiment_data),
+            },
+            "content_quality": {
+                "avg_text_length": df["text_length"].mean(),
+                "detailed_post_ratio": len(df[df["text_length"] > 500]) / len(df),
+            },
+        }
+        return community_analysis
+
+    def calculate_question_response_rate(self, df):
+        question_posts = [
+            item
+            for item in self.sentiment_data
+            if item["content_type"] == "post"
+            and item["metadata"]["question_indicators"]["is_question"]
+        ]
+
+        if not question_posts:
+            return 0
+
+        responded_questions = sum(
+            1 for post in question_posts if post.get("num_comments", 0) > 0
+        )
+        return responded_questions / len(question_posts)
+
+    def analyze_content_patterns(self, df):
+
+        content_analysis = {
+            "question_patterns": {
+                "total_questions": sum(
+                    1
+                    for item in self.sentiment_data
+                    if item["metadata"]["question_indicators"]["is_question"]
+                ),
+                "question_types": self.categorize_question_types(),
+                "avg_question_sentiment": np.mean(
+                    [
+                        item["adjusted_compound"]
+                        for item in self.sentiment_data
+                        if item["metadata"]["question_indicators"]["is_question"]
+                    ]
+                ),
+            },
+            "urgency_analysis": {
+                "urgency_distribution": Counter(
+                    [item["metadata"]["urgency_level"] for item in self.sentiment_data]
+                ).most_common(),
+                "urgency_sentiment_correlation": self.analyze_urgency_sentiment_correlation(),
+            },
+            "form_mentions": {
+                "most_mentioned_forms": self.get_most_mentioned_forms(),
+                "common_wait_times": self.extract_common_wait_times(),
+            },
+        }
+        return content_analysis
+
+    def categorize_question_types(self):
+        question_categories = {
+            "timeline": ["how long", "when will", "timeline", "processing time"],
+            "status": ["case status", "what does this mean", "is this normal"],
+            "process": ["what happens next", "next steps", "should i"],
+            "documents": ["what documents", "do i need", "required"],
+            "expedite": ["expedite", "urgent", "emergency"],
+            "denial": ["denied", "rfe", "noid", "appeal"],
+        }
+
+        question_type_counts = {category: 0 for category in question_categories}
+        for item in self.sentiment_data:
+            if item["metadata"]["question_indicators"]["is_question"]:
+                text_lower = item["full_text"].lower()
+                for category, keywords in question_categories.items():
+                    if any(keyword in text_lower for keyword in keywords):
+                        question_type_counts[category] += 1
+                        break
+
+        return question_type_counts
+
+    def analyze_urgency_sentiment_correlation(self):
+        urgency_sentiment = {"high": [], "medium": [], "low": []}
+        for item in self.sentiment_data:
+            urgency = item["metadata"]["urgency_level"]
+            urgency_sentiment[urgency].append(item["adjusted_compound"])
+
+        return {
+            level: np.mean(sentiments) if sentiments else 0
+            for level, sentiments in urgency_sentiment.items()
+        }
+
+    def get_most_mentioned_forms(self):
+        form_mentions = []
+        for item in self.sentiment_data:
+            form_mentions.extend(item["metadata"].get("location_mentions", []))
+
+        return Counter(form_mentions).most_common(10)
+
+    def analyze_form_sentiment(self):
+        form_sentiment = defaultdict(list)
+        for item in self.sentiment_data:
+            for form in item["metadata"].get("form_mentions", []):
+                form_sentiment[form].append(item["adjusted_compound"])
+        return {
+            form: np.mean(sentiments)
+            for form, sentiments in form_sentiment.items()
+            if len(sentiments) >= 5
+        }  # Only forms with at least 5 mentions
+
+    def extract_common_wait_times(self):
+        wait_patterns = {
+            "days": r"(\d+)\s*days?",
+            "weeks": r"(\d+)\s*weeks?",
+            "months": r"(\d+)\s*months?",
+            "years": r"(\d+)\s*years?",
+        }
+        wait_times = {"days": [], "weeks": [], "months": [], "years": []}
+        for item in self.sentiment_data:
+            text = item["full_text"].lower()
+            for unit, pattern in wait_patterns.items():
+                matches = re.findall(pattern, text)
+                wait_times[unit].extend(
+                    [int(m) for m in matches if int(m) < 100]
+                )  # Filter out unrealistic values
+
+        return {
+            unit: {
+                "mentions": len(times),
+                "average": np.mean(times) if times else 0,
+                "median": np.median(times) if times else 0,
+            }
+            for unit, times in wait_times.items()
+        }
