@@ -9,7 +9,7 @@ Key Research Questions Answered:
 - Sentiment Across Categories: Immigrant vs nonimmigrant visa sentiment comparison
 - Field Office Analysis: Most mentioned offices with associated sentiment and topics
 
-Visualizations & Insights
+Visualizations & Insights:
 The system generates comprehensive dashboards including:
 
 Monthly sentiment trends with volume overlay:
