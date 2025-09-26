@@ -1548,6 +1548,13 @@ class EnhancedUSCISAnalyzer:
             if len(sentiments) >= 5
         }  # Only forms with at least 5 mentions
 
+    def analyze_timeline_mentions(self):
+        timeline_mentions = []
+        for item in self.sentiment_data:
+            timeline_mentions.extend(item["metadata"].get("timeline_mentions", []))
+
+        return Counter([str(t) for t in timeline_mentions]).most_common(20)
+
     def extract_common_wait_times(self):
         wait_patterns = {
             "days": r"(\d+)\s*days?",
@@ -1572,3 +1579,23 @@ class EnhancedUSCISAnalyzer:
             }
             for unit, times in wait_times.items()
         }
+
+    def analyze_geographic_patterns(self, df):
+        location_sentiment = defaultdict(list)
+        location_counts = Counter()
+
+        for item in self.sentiment_data:
+            for location in item["metadata"].get("location_mentions", []):
+                location_sentiment[location].append(item["adjusted_compound"])
+                location_counts[location] += 1
+
+        geographic_analysis = {
+            "most_mentioned_locations": location_counts.most_common(10),
+            "location_sentiment": {
+                loc: np.mean(sentiments)
+                for loc, sentiments in location_sentiment.items()
+                if len(sentiments) >= 5
+            },
+            "service_center_analysis": self.analyze_service_center_patterns(),
+        }
+        return geographic_analysis
